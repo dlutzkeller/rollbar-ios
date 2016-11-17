@@ -239,8 +239,15 @@ static BOOL isNetworkReachable = YES;
     NSDictionary *customData = self.configuration.customData;
     
     NSDictionary *body = [self buildPayloadBodyWithMessage:message exception:exception extra:extra crashReport:crashReport];
-    
-    NSMutableDictionary *data = [@{@"environment": self.configuration.environment,
+
+    NSString * const accessToken = self.configuration.accessToken;
+    NSString * const environment = self.configuration.environment;
+    if (!accessToken || !environment) {
+        RollbarLog(@"Can't build payload without an access token or environment");
+        return nil;
+    }
+
+    NSMutableDictionary *data = [@{@"environment": environment,
                                    @"level": level,
                                    @"language": @"objective-c",
                                    @"framework": @"ios",
@@ -256,8 +263,8 @@ static BOOL isNetworkReachable = YES;
     if (personData) {
         data[@"person"] = personData;
     }
-    
-    return @{@"access_token": self.configuration.accessToken,
+
+    return @{@"access_token": accessToken,
              @"data": data};
 }
 
@@ -285,9 +292,20 @@ static BOOL isNetworkReachable = YES;
 }
 
 - (void)queuePayload:(NSDictionary*)payload {
+    if (!payload) {
+        RollbarLog(@"Skipping empty payload");
+        return;
+    }
+    NSError *error;
+    NSData * const data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&error];
+    if (!data) {
+        NSString * const reason = [error localizedDescription] ?: @"unknown error";
+        RollbarLog(@"Error serializing payload data: %@", reason);
+        return;
+    }
     NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:queuedItemsFilePath];
     [fileHandle seekToEndOfFile];
-    [fileHandle writeData:[NSJSONSerialization dataWithJSONObject:payload options:0 error:nil]];
+    [fileHandle writeData:data];
     [fileHandle writeData:[@"\n" dataUsingEncoding:NSUTF8StringEncoding]];
     [fileHandle closeFile];
 }
@@ -333,8 +351,9 @@ static BOOL isNetworkReachable = YES;
     NSData *data = [NSURLConnection sendSynchronousRequest:request returningResponse:&response error:&error];
     
     if (error) {
+        NSString * const errorDescription = [error localizedDescription] ?: @"unknown";
         RollbarLog(@"There was an error reporting to Rollbar");
-        RollbarLog(@"Error: %@", [error localizedDescription]);
+        RollbarLog(@"Error: %@", errorDescription);
     } else {
         NSHTTPURLResponse* httpResponse = (NSHTTPURLResponse*)response;
         if ([httpResponse statusCode] == 200) {
@@ -342,7 +361,12 @@ static BOOL isNetworkReachable = YES;
             return YES;
         } else {
             RollbarLog(@"There was a problem reporting to Rollbar");
-            RollbarLog(@"Response: %@", [NSJSONSerialization JSONObjectWithData:data options:0 error:nil]);
+            id const response = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (response) {
+                RollbarLog(@"Response: %@", response);
+            } else {
+                RollbarLog(@"Error deserializing response");
+            }
         }
     }
     
